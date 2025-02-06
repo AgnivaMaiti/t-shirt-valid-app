@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "KScanner",
-    "slug": "qrscanner",
+    "slug": "kiitfest",
     "version": "2.0.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -20,7 +20,10 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "permissions": ["android.permission.CAMERA", "android.permission.RECORD_AUDIO"],
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
       "package": "com.priyangsubanerjee.qrscanner"
     },
     "web": {
@@ -46,8 +49,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "23019e91-2d1d-4c51-b763-79c64f66f12f"
+        "projectId": "7b36bc9b-fec5-4ee1-9fb6-0f747d280a89"
       }
-    }
+    },
+    "owner": "agnivamaiti"
   }
 }

@@ -1,6 +1,6 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useState, useEffect } from "react";
-import { Button, StyleSheet, Text, TouchableOpacity, View, Modal, TextInput, StatusBar } from "react-native";
+import { Button, StyleSheet, Text, TouchableOpacity, View, Modal, TextInput, StatusBar, Alert } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Toast from "react-native-toast-message";
@@ -13,23 +13,17 @@ export default function App() {
   const [scannedText, setScannedText] = useState("");
   const [scanPaused, setScanPaused] = useState(false);
   const [apiUrl, setApiUrl] = useState("");
-  const [targetGender, setTargetGender] = useState("male");
-  const [volunteerCode, setVolunteerCode] = useState("");
   const [modalVisible, setModalVisible] = useState(false);
   const [lastScannedData, setLastScannedData] = useState(null);
-  const [apiStatus, setApiStatus] = useState("idle"); // Default to "idle"
-  const [gender, setGender] = useState("");
-  const [apiKey, setApiKey] = useState("");
+  const [apiStatus, setApiStatus] = useState("idle");
 
+
+  // Load saved API URL on mount
   useEffect(() => {
     const loadStatic = async () => {
       try {
         const storedUrl = await AsyncStorage.getItem("apiUrl");
-        const storedGender = await AsyncStorage.getItem("targetGender");
-        const volunteerCode = await AsyncStorage.getItem("volunteerCode");
         if (storedUrl) setApiUrl(storedUrl);
-        if (storedGender) setTargetGender(storedGender);
-        if (volunteerCode) setVolunteerCode(volunteerCode);
       } catch (error) {
         console.error("Error loading settings:", error);
       }
@@ -37,7 +31,14 @@ export default function App() {
     loadStatic();
   }, []);
 
-  if (!permission) return <View />;
+  if (!permission) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.message}>Loading camera permissions...</Text>
+      </View>
+    );
+  }
+
   if (!permission.granted) {
     return (
       <View style={styles.container}>
@@ -64,53 +65,124 @@ export default function App() {
       setLastScannedData(data);
       setScanPaused(true);
       setScanCooldown(true);
-      makeApiRequest(data);
+      processKfid(data);
 
       setTimeout(() => {
         setScanCooldown(false);
         setScanPaused(false);
-      }, 100); // Scan cooldown
+      }, 1000);
     }
   }
 
-  async function makeApiRequest(data) {
+  async function processKfid(qrData) {
     try {
-      if (!targetGender || !apiUrl || !volunteerCode) {
-        setModalVisible(true);
-      } else {
-        setApiStatus("loading"); // Set status to loading initially
+      setApiStatus("loading");
 
-        const response = await fetch(apiUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ scannedData: data }),
+      let kfid = qrData.trim();
+
+      const orderResponse = await fetch(`${apiUrl}/tee-order`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          kfid,
+        }),
+      },);
+      const result = await orderResponse.json();
+      console.log(result.teeOrders[0].id)
+      const {id} = result.teeOrders[0];
+      const {size} = result.teeOrders[0];
+      const {participantEmail} = result.teeOrders[0];
+
+
+      if (!orderResponse.ok) {
+        const errorData = await orderResponse.json();
+        Toast.show({
+          type: "error",
+          text1: "Error",
+          text2: errorData.error || "Failed to process KFID",
         });
+        setApiStatus("error");
+        return;
+      }
 
-        if (response.ok) {
-          setApiStatus("success"); // Set status to success
-          setTimeout(() => {
-            setApiStatus("idle"); // Reset status to idle after 100ms
-          }, 500);
-        } else {
-          setApiStatus("error"); // Set status to error
-          const errorMessage = await response.text();
-          Toast.show({
-            type: "error",
-            position: "top",
-            text1: "API Request Failed",
-            text2: errorMessage || "There was an error with the request. Please try again.",
-            visibilityTime: 3000,
-          });
-          setTimeout(() => {
-            setApiStatus("idle"); // Reset status to idle after 100ms
-          }, 500);
-        }
+      // const {id} = result.teeOrders[0];
+      // console.log(id)
+
+      // Show confirmation dialog
+      Alert.alert(
+        "Confirm Delivery",
+        "Do you want to mark this order as delivered?",
+        id,
+        size,
+        participantEmail,
+        [
+          {
+            text: "Cancel",
+            style: "cancel",
+            onPress: () => {
+              setApiStatus("idle");
+            },
+          },
+          {
+            text: "Confirm",
+            onPress: async () => {
+              await processTeeDelivery(id);
+            },
+          },
+        ],
+        { cancelable: false }
+      );
+    } catch (error) {
+      console.error("Error processing KFID:", error);
+      Toast.show({
+        type: "error",
+        text1: "Error",
+        text2: "Failed to process KFID",
+      });
+      setApiStatus("error");
+    }
+  }
+
+  async function processTeeDelivery(id) {
+    try {
+      const response = await fetch(`${apiUrl}/tee-order/deliver`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          orderId: id,
+        }),
+      });
+
+      if (response.ok) {
+        Toast.show({
+          type: "success",
+          text1: "Success",
+          text2: "TEE order marked as delivered",
+
+        });
+        setApiStatus("success");
+      } else {
+        const errorData = await response.json();
+        Toast.show({
+          type: "error",
+          text1: "Delivery Failed",
+          text2: errorData.error || "Failed to mark order as delivered",
+        });
+        setApiStatus("error");
       }
     } catch (error) {
-      console.error("Error making API request:", error);
+      console.error("Error processing delivery:", error);
+      Toast.show({
+        type: "error",
+        text1: "Error",
+        text2: "Failed to process delivery",
+      });
       setApiStatus("error");
+    } finally {
       setTimeout(() => {
         setApiStatus("idle");
       }, 500);
@@ -140,46 +212,43 @@ export default function App() {
   const handleSave = async () => {
     try {
       await AsyncStorage.setItem("apiUrl", apiUrl);
-      await AsyncStorage.setItem("targetGender", targetGender);
-      await AsyncStorage.setItem("volunteerCode", volunteerCode);
       setModalVisible(false);
     } catch (error) {
       console.error("Error saving settings:", error);
     }
   };
+
   return (
     <View style={styles.container}>
       <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
       <View style={styles.cameraContainer}>
-        <CameraView style={styles.camera} facing={facing} enableTorch={torch} onBarcodeScanned={handleBarcodeScanned} />
+        <CameraView 
+          style={styles.camera} 
+          facing={facing} 
+          enableTorch={torch} 
+          onBarcodeScanned={handleBarcodeScanned}
+        />
       </View>
 
-      {/* Status row */}
       <View
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          flex: 4,
-          height: "100%",
-          backgroundColor: apiStatus == "error" ? "rgba(255, 0, 0, 0.3)" : apiStatus == "success" ? "rgba(34, 255, 0, 0.3)" : "transparent",
-          paddingHorizontal: 20,
-        }}
-      ></View>
+        style={[
+          styles.overlay,
+          {
+            backgroundColor: 
+              apiStatus === "error" ? "rgba(255, 0, 0, 0.3)" : 
+              apiStatus === "success" ? "rgba(34, 255, 0, 0.3)" : 
+              "transparent",
+          }
+        ]}
+      />
+
       <View style={styles.statusRow}>
-        <TouchableOpacity
-          style={{
-            padding: 10,
-          }}
-          onPress={resetScan}
-        >
+        <TouchableOpacity style={styles.resetButton} onPress={resetScan}>
           <Text>Reset</Text>
         </TouchableOpacity>
         <View style={[styles.statusIndicator, { backgroundColor: getIndicatorColor() }]} />
       </View>
 
-      {/* Controls */}
       <View style={styles.controlsContainer}>
         <TouchableOpacity style={styles.button} onPress={toggleCameraFacing}>
           <Ionicons name="camera-reverse" style={styles.icon} />
@@ -192,7 +261,6 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
-      {/* Modal */}
       <Modal visible={modalVisible} onRequestClose={() => setModalVisible(false)} animationType="slide">
         <View style={styles.modalContainer}>
           <View>
@@ -215,188 +283,35 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
-          <View
-            style={{
-              justifyContent: "center",
-              alignItems: "center",
-              marginTop: 20,
-            }}
-          >
-            <View
-              style={{
-                backgroundColor: "rgba(0,0,0,0.05)",
-                height: 70,
-                width: 70,
-                borderRadius: 100,
-                justifyContent: "center",
-                alignItems: "center",
-              }}
-            >
-              <Ionicons
-                style={{
-                  fontSize: 34,
-                }}
-                name="cog-outline"
-              />
+          <View style={styles.modalHeader}>
+            <View style={styles.modalIconContainer}>
+              <Ionicons name="cog-outline" style={styles.modalHeaderIcon} />
             </View>
+            <Text style={styles.modalTitle}>General configurations</Text>
+            <Text style={styles.modalVersion}>v2.0.5</Text>
           </View>
-          <Text
-            style={{
-              textAlign: "center",
-              marginTop: 20,
-              fontSize: 16,
-              color: "rgba(0,0,0,0.8)",
-              fontWeight: "400",
-            }}
-          >
-            General configurations
-          </Text>
-          <Text
-            style={{
-              textAlign: "center",
-              marginTop: 10,
-              fontSize: 12,
-              color: "rgba(0,0,0,0.3)",
-              fontWeight: "400",
-            }}
-          >
-            v2.0.5
-          </Text>
 
-          <View style={{ marginTop: 30, backgroundColor: "rgba(0,0,0,0.05)", borderRadius: 15, overflow: "hidden" }}>
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                borderBottomWidth: 1,
-                borderBottomColor: "rgba(0,0,0,0.05)",
-                gap: 6,
-              }}
-            >
-              <View
-                style={{
-                  width: 60,
-                  height: 60,
-                  justifyContent: "center",
-                  alignItems: "center",
-                }}
-              >
-                <Ionicons
-                  style={{
-                    fontSize: 20,
-                  }}
-                  name="server-outline"
-                />
+          <View style={styles.formContainer}>
+            <View style={styles.inputContainer}>
+              <View style={styles.inputIconContainer}>
+                <Ionicons name="server-outline" style={styles.inputIcon} />
               </View>
               <TextInput
-                style={{
-                  height: 60,
-                  fontSize: 15,
-                  width: "100%",
-                }}
+                style={styles.input}
                 value={apiUrl}
                 onChangeText={setApiUrl}
                 placeholder="Enter base url of the server"
                 autoCapitalize="none"
               />
             </View>
-
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                borderBottomWidth: 1,
-                borderBottomColor: "rgba(0,0,0,0.05)",
-                gap: 6,
-              }}
-            >
-              <View
-                style={{
-                  width: 60,
-                  height: 60,
-                  justifyContent: "center",
-                  alignItems: "center",
-                  backgroundColor: "rgba(0,0,0,0.03)",
-                }}
-              >
-                <Ionicons
-                  style={{
-                    fontSize: 20,
-                  }}
-                  name="toggle"
-                />
-              </View>
-              <TextInput
-                style={{
-                  height: 60,
-                  fontSize: 15,
-                  width: "100%",
-                }}
-                value={targetGender}
-                onChangeText={setTargetGender}
-                placeholder="Scanning for 100-B / 101-G"
-                autoCapitalize="none"
-                keyboardType="numeric"
-              />
-            </View>
-
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 6,
-              }}
-            >
-              <View
-                style={{
-                  width: 60,
-                  height: 60,
-                  justifyContent: "center",
-                  alignItems: "center",
-                  backgroundColor: "rgba(0,0,0,0.03)",
-                }}
-              >
-                <Ionicons
-                  style={{
-                    fontSize: 20,
-                  }}
-                  name="keypad-outline"
-                />
-              </View>
-              <TextInput
-                style={{
-                  height: 60,
-                  fontSize: 15,
-                  width: "100%",
-                }}
-                value={volunteerCode}
-                onChangeText={setVolunteerCode}
-                placeholder="Volunteer code"
-                autoCapitalize="none"
-                keyboardType="numeric"
-              />
-            </View>
           </View>
 
-          <View>
-            <TouchableOpacity
-              onPress={() => handleSave()}
-              style={{
-                backgroundColor: "rgba(0,0,0,0.9)",
-                height: 45,
-                justifyContent: "center",
-                alignItems: "center",
-                borderRadius: 100,
-                marginTop: 20,
-                flexDirection: "row",
-                alignItems: "center",
-              }}
-            >
-              <Text style={{ color: "#fff", fontSize: 16 }}>Save</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
+            <Text style={styles.saveButtonText}>Save</Text>
+          </TouchableOpacity>
         </View>
       </Modal>
+      <Toast />
     </View>
   );
 }
@@ -418,22 +333,24 @@ const styles = StyleSheet.create({
     flex: 1,
     width: "100%",
   },
+  overlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 20,
+  },
   statusRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingTop: 20,
-    backgroundColor: "rgba(255, 255, 255,1)",
+    backgroundColor: "white",
   },
   resetButton: {
     padding: 10,
-    backgroundColor: "rgba(0,0,0,0.1)",
-    borderRadius: 50,
-  },
-  resetIcon: {
-    fontSize: 24,
-    color: "#000",
   },
   statusIndicator: {
     width: 20,
@@ -446,7 +363,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "flex-start",
     paddingTop: 40,
-    backgroundColor: "rgba(255, 255, 255, 1)",
+    backgroundColor: "white",
   },
   button: {
     marginHorizontal: 10,
@@ -462,57 +379,73 @@ const styles = StyleSheet.create({
     backgroundColor: "white",
     padding: 20,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "100",
+  modalHeader: {
+    alignItems: "center",
+    marginTop: 20,
   },
-  modalInput: {
-    height: 60,
-    paddingHorizontal: 20,
+  modalIconContainer: {
+    backgroundColor: "rgba(0,0,0,0.05)",
+    height: 70,
+    width: 70,
+    borderRadius: 35,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalHeaderIcon: {
+    fontSize: 34,
+  },
+  modalTitle: {
+    textAlign: "center",
+    marginTop: 20,
+    fontSize: 16,
+    color: "rgba(0,0,0,0.8)",
+    fontWeight: "400",
+  },
+  modalVersion: {
+    textAlign: "center",
+    marginTop: 10,
+    fontSize: 12,
+    color: "rgba(0,0,0,0.3)",
+    fontWeight: "400",
+  },
+  formContainer: {
+    marginTop: 30,
+    backgroundColor: "rgba(0,0,0,0.05)",
+    borderRadius: 15,
+    overflow: "hidden",
+  },
+  inputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
     borderBottomWidth: 1,
     borderBottomColor: "rgba(0,0,0,0.05)",
   },
-  modalParagraph: {
-    fontSize: 13,
-    marginTop: 5,
-    color: "rgba(0,0,0,0.5)",
+  inputIconContainer: {
+    width: 60,
+    height: 60,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.03)",
   },
-  modalButtonsContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+  inputIcon: {
+    fontSize: 20,
   },
-  modalButton: {
-    backgroundColor: "#007bff",
-    paddingVertical: 12,
-    paddingHorizontal: 30,
-    borderRadius: 5,
+  input: {
+    height: 60,
+    fontSize: 15,
     flex: 1,
-    marginHorizontal: 5,
+    paddingHorizontal: 10,
   },
-  modalButtonText: {
-    color: "white",
-    textAlign: "center",
-    fontSize: 16,
-  },
-  label: {
-    fontSize: 18,
-    marginBottom: 10,
-    color: "#333",
-  },
-  dropdown: {
-    width: 200,
-    borderWidth: 1,
-    borderColor: "#007AFF",
-    borderRadius: 5,
-    backgroundColor: "#fff",
-  },
-  picker: {
-    width: "100%",
-    height: 50,
-  },
-  selectedText: {
+  saveButton: {
+    backgroundColor: "rgba(0,0,0,0.9)",
+    height: 45,
+    justifyContent: "center",
+    alignItems: "center",
+    borderRadius: 100,
     marginTop: 20,
+  },
+  saveButtonText: {
+    color: "#fff",
     fontSize: 16,
-    fontWeight: "bold",
   },
 });
