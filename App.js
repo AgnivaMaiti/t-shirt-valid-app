@@ -13,23 +13,38 @@ export default function App() {
   const [scannedText, setScannedText] = useState("");
   const [scanPaused, setScanPaused] = useState(false);
   const [apiUrl, setApiUrl] = useState("");
+  const [targetGender, setTargetGender] = useState("male");
+  const [volunteerCode, setVolunteerCode] = useState("");
   const [modalVisible, setModalVisible] = useState(false);
   const [lastScannedData, setLastScannedData] = useState(null);
   const [apiStatus, setApiStatus] = useState("idle");
+  const [password, setPassword] = useState("");
+  const [isAppReady, setIsAppReady] = useState(false);
+  const [loginModalVisible, setLoginModalVisible] = useState(true);
 
-
-  // Load saved API URL on mount
   useEffect(() => {
     const loadStatic = async () => {
       try {
         const storedUrl = await AsyncStorage.getItem("apiUrl");
-        if (storedUrl) setApiUrl(storedUrl);
+        const storedPassword = await AsyncStorage.getItem("password");
+        const storedGender = await AsyncStorage.getItem("targetGender");
+        const storedVolunteerCode = await AsyncStorage.getItem("volunteerCode");
+        
+        if (storedUrl && storedPassword) {
+          setApiUrl(storedUrl);
+          setPassword(storedPassword);
+          if (storedGender) setTargetGender(storedGender);
+          if (storedVolunteerCode) setVolunteerCode(storedVolunteerCode);
+          verifyStartupCredentials(storedUrl, storedPassword);
+        }
       } catch (error) {
         console.error("Error loading settings:", error);
       }
     };
     loadStatic();
   }, []);
+
+
 
   if (!permission) {
     return (
@@ -47,6 +62,54 @@ export default function App() {
       </View>
     );
   }
+
+
+  
+    async function verifyStartupCredentials(url, pwd) {
+      if (!url || !pwd || !targetGender || !volunteerCode) {
+        Toast.show({
+          type: "error",
+          text1: "Configuration Error",
+          text2: "Please fill in all required fields",
+        });
+        return;
+      }
+  
+      try {
+        const response = await fetch(${url}/verify-password, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            password: pwd
+          }),
+        });
+  
+        if (response.ok) {
+          await AsyncStorage.setItem("apiUrl", url);
+          await AsyncStorage.setItem("password", pwd);
+          await AsyncStorage.setItem("targetGender", targetGender);
+          await AsyncStorage.setItem("volunteerCode", volunteerCode);
+          setIsAppReady(true);
+          setLoginModalVisible(false);
+        } else {
+          Toast.show({
+            type: "error",
+            text1: "Authentication Failed",
+            text2: "Incorrect credentials",
+          });
+        }
+      } catch (error) {
+        console.error("Verification error:", error);
+        Toast.show({
+          type: "error",
+          text1: "Error",
+          text2: "Failed to verify credentials",
+        });
+      }
+    }
+  
 
   function toggleCameraFacing() {
     setFacing(facing === "back" ? "front" : "back");
@@ -74,80 +137,41 @@ export default function App() {
     }
   }
 
-  async function processKfid(qrData) {
+  async function processPassword() {
     try {
-      setApiStatus("loading");
-
-      let kfid = qrData.trim();
-
-      const orderResponse = await fetch(`${apiUrl}/tee-order`, {
+      const response = await fetch(${apiUrl}/password, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          kfid,
+          password: password
         }),
-      },);
-      const result = await orderResponse.json();
-      console.log(result.teeOrders[0].id)
-      const {id} = result.teeOrders[0];
-      const {size} = result.teeOrders[0];
-      const {participantEmail} = result.teeOrders[0];
+      });
 
-
-      if (!orderResponse.ok) {
-        const errorData = await orderResponse.json();
+      if (response.ok) {
+        await processTeeDelivery(lastScannedData);
+        setPassword("");
+      } else {
         Toast.show({
           type: "error",
-          text1: "Error",
-          text2: errorData.error || "Failed to process KFID",
+          text1: "Authentication Failed",
+          text2: "Incorrect password",
         });
-        setApiStatus("error");
-        return;
       }
-
-      // const {id} = result.teeOrders[0];
-      // console.log(id)
-
-      // Show confirmation dialog
-      Alert.alert(
-        "Confirm Delivery",
-        "Do you want to mark this order as delivered?",
-        id,
-        size,
-        participantEmail,
-        [
-          {
-            text: "Cancel",
-            style: "cancel",
-            onPress: () => {
-              setApiStatus("idle");
-            },
-          },
-          {
-            text: "Confirm",
-            onPress: async () => {
-              await processTeeDelivery(id);
-            },
-          },
-        ],
-        { cancelable: false }
-      );
     } catch (error) {
-      console.error("Error processing KFID:", error);
+      console.error("Password verification error:", error);
       Toast.show({
         type: "error",
         text1: "Error",
-        text2: "Failed to process KFID",
+        text2: "Failed to verify password",
       });
-      setApiStatus("error");
     }
   }
 
   async function processTeeDelivery(id) {
     try {
-      const response = await fetch(`${apiUrl}/tee-order/deliver`, {
+      const response = await fetch(${apiUrl}/tee-order/deliver, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -162,7 +186,6 @@ export default function App() {
           type: "success",
           text1: "Success",
           text2: "TEE order marked as delivered",
-
         });
         setApiStatus("success");
       } else {
@@ -189,6 +212,76 @@ export default function App() {
     }
   }
 
+  function confirmDelivery(id, participantEmail, size) {
+    Alert.prompt(
+      "Confirm Delivery",
+      Verify delivery for:\nEmail: ${participantEmail}\nSize: ${size}\nOrderId: ${id},
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+          onPress: () => {
+            setApiStatus("idle");
+          },
+        },
+        {
+          text: "Confirm",
+          onPress: (enteredPassword) => {
+            setPassword(enteredPassword);
+            processPassword();
+          },
+        },
+      ],
+      "secure-text"
+    );
+  }
+
+  async function processKfid(qrData) {
+    try {
+      setApiStatus("loading");
+
+      let kfid = qrData.trim();
+
+      const orderResponse = await fetch(${apiUrl}/tee-order, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          kfid,
+        }),
+      });
+
+      const result = await orderResponse.json();
+
+      if (!orderResponse.ok) {
+        const errorData = await orderResponse.json();
+        Toast.show({
+          type: "error",
+          text1: "Error",
+          text2: errorData.error || "Failed to process KFID",
+        });
+        setApiStatus("error");
+        return;
+      }
+
+      const {id} = result.teeOrders[0];
+      const {size} = result.teeOrders[0];
+      const {participantEmail} = result.teeOrders[0];
+
+      confirmDelivery(id, participantEmail, size);
+
+    } catch (error) {
+      console.error("Error processing KFID:", error);
+      Toast.show({
+        type: "error",
+        text1: "Error",
+        text2: "Failed to process KFID",
+      });
+      setApiStatus("error");
+    }
+  }
+
   function resetScan() {
     setScannedText("");
     setLastScannedData(null);
@@ -209,14 +302,92 @@ export default function App() {
     }
   };
 
+
   const handleSave = async () => {
     try {
       await AsyncStorage.setItem("apiUrl", apiUrl);
+      await AsyncStorage.setItem("targetGender", targetGender);
+      await AsyncStorage.setItem("volunteerCode", volunteerCode);
       setModalVisible(false);
+      Toast.show({
+        type: "success",
+        text1: "Success",
+        text2: "Settings saved successfully",
+      });
     } catch (error) {
       console.error("Error saving settings:", error);
+      Toast.show({
+        type: "error",
+        text1: "Error",
+        text2: "Failed to save settings",
+      });
     }
   };
+
+  if (!isAppReady) {
+    return (
+      <Modal 
+        visible={loginModalVisible}
+        animationType="slide"
+        transparent={true}
+      >
+        <View style={styles.loginModalContainer}>
+          <View style={styles.loginModalContent}>
+            <Text style={styles.loginTitle}>Initial Setup</Text>
+            
+            <Text style={styles.inputLabel}>API URL</Text>
+            <TextInput
+              style={styles.loginInput}
+              placeholder="Enter API URL"
+              value={apiUrl}
+              onChangeText={setApiUrl}
+              autoCapitalize="none"
+              keyboardType="url"
+            />
+            
+            <Text style={styles.inputLabel}>Password</Text>
+            <TextInput
+              style={styles.loginInput}
+              placeholder="Enter Password"
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+            />
+
+            <Text style={styles.inputLabel}>Target Gender</Text>
+            <TextInput
+              style={styles.loginInput}
+              placeholder="Enter Target Gender (male/female)"
+              value={targetGender}
+              onChangeText={setTargetGender}
+              autoCapitalize="none"
+            />
+
+            <Text style={styles.inputLabel}>Volunteer Code</Text>
+            <TextInput
+              style={styles.loginInput}
+              placeholder="Enter Volunteer Code"
+              value={volunteerCode}
+              onChangeText={setVolunteerCode}
+              keyboardType="numeric"
+            />
+            
+            <TouchableOpacity 
+              style={[
+                styles.loginButton,
+                (!apiUrl || !password || !targetGender || !volunteerCode) && 
+                styles.loginButtonDisabled
+              ]} 
+              onPress={() => verifyStartupCredentials(apiUrl, password)}
+              disabled={!apiUrl || !password || !targetGender || !volunteerCode}
+            >
+              <Text style={styles.loginButtonText}>Login</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -245,7 +416,7 @@ export default function App() {
       <View style={styles.statusRow}>
         <TouchableOpacity style={styles.resetButton} onPress={resetScan}>
           <Text>Reset</Text>
-        </TouchableOpacity>
+        </TouchableOpacity> 
         <View style={[styles.statusIndicator, { backgroundColor: getIndicatorColor() }]} />
       </View>
 
@@ -266,20 +437,9 @@ export default function App() {
           <View>
             <TouchableOpacity
               onPress={() => setModalVisible(false)}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 7,
-              }}
+              style={styles.modalCloseButton}
             >
-              <Text
-                style={{
-                  fontWeight: "500",
-                  color: "rgba(0,0,0,0.8)",
-                }}
-              >
-                Cancel
-              </Text>
+              <Text style={styles.modalCloseText}>Cancel</Text>
             </TouchableOpacity>
           </View>
 
@@ -302,6 +462,32 @@ export default function App() {
                 onChangeText={setApiUrl}
                 placeholder="Enter base url of the server"
                 autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <View style={styles.inputIconContainer}>
+                <Ionicons name="toggle" style={styles.inputIcon} />
+              </View>
+              <TextInput
+                style={styles.input}
+                value={targetGender}
+                onChangeText={setTargetGender}
+                placeholder="Target Gender (male/female)"
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <View style={styles.inputIconContainer}>
+                <Ionicons name="keypad-outline" style={styles.inputIcon} />
+              </View>
+              <TextInput
+                style={styles.input}
+                value={volunteerCode}
+                onChangeText={setVolunteerCode}
+                placeholder="Volunteer Code"
+                keyboardType="numeric"
               />
             </View>
           </View>
@@ -447,5 +633,65 @@ const styles = StyleSheet.create({
   saveButtonText: {
     color: "#fff",
     fontSize: 16,
+  },
+  loginModalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  loginModalContent: {
+    width: '80%',
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 20,
+    alignItems: 'center',
+  },
+  loginTitle: {
+    fontSize: 18,
+    marginBottom: 20,
+  },
+  loginInput: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 5,
+    padding: 10,
+    marginBottom: 20,
+  },
+  loginButton: {
+    backgroundColor: 'black',
+    padding: 10,
+    borderRadius: 5,
+    width: '100%',
+    alignItems: 'center',
+  },
+  loginButtonText: {
+    color: 'white',
+    fontSize: 16,
+  },
+
+  inputLabel: {
+    alignSelf: 'flex-start',
+    marginBottom: 5,
+    fontSize: 14,
+    color: 'rgba(0,0,0,0.6)',
+  },
+  loginButtonDisabled: {
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  errorText: {
+    color: 'red',
+    marginBottom: 10,
+    fontSize: 12,
+  },
+    modalCloseButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  modalCloseText: {
+    fontWeight: "500",
+    color: "rgba(0,0,0,0.8)",
   },
 });
