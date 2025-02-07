@@ -76,7 +76,7 @@ export default function App() {
       }
   
       try {
-        const response = await fetch(${url}/verify-password, {
+        const response = await fetch(`${url}/verify-password`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -128,7 +128,7 @@ export default function App() {
       setLastScannedData(data);
       setScanPaused(true);
       setScanCooldown(true);
-      processKfid(data);
+      ProcessQRSCAN(data,volunteerCode)
 
       setTimeout(() => {
         setScanCooldown(false);
@@ -137,41 +137,54 @@ export default function App() {
     }
   }
 
-  async function processPassword() {
-    try {
-      const response = await fetch(${apiUrl}/password, {
+  async function ProcessQRSCAN(kfid, volunteerCode){
+    try{
+      const response = await fetch(`${apiUrl}`,{
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          password: password
-        }),
-      });
+          kfid,
+          volunteerCode
+        })
+      })
 
-      if (response.ok) {
-        await processTeeDelivery(lastScannedData);
-        setPassword("");
-      } else {
+      const result = await response.json();
+
+      if(!response.ok){
         Toast.show({
           type: "error",
-          text1: "Authentication Failed",
-          text2: "Incorrect password",
+          text1: "ERROR",
+          text2: result.message,
         });
+        setApiStatus("error");
+      }else{
+        Toast.show({
+          type: "success",
+          text1: "SUCCESS",
+          text2: result.message,
+        });
+        setApiStatus("success");
       }
-    } catch (error) {
-      console.error("Password verification error:", error);
+    }catch(error){
+      console.error("Distribution Error:", error);
       Toast.show({
         type: "error",
         text1: "Error",
-        text2: "Failed to verify password",
+        text2: "Failed to Process Request",
       });
+      setApiStatus("error");
+    }finally{
+      setTimeout(() => {
+        setApiStatus("idle");
+      }, 500);
     }
   }
 
   async function processTeeDelivery(id) {
     try {
-      const response = await fetch(${apiUrl}/tee-order/deliver, {
+      const response = await fetch(`${apiUrl}/tee-order/deliver`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -193,7 +206,7 @@ export default function App() {
         Toast.show({
           type: "error",
           text1: "Delivery Failed",
-          text2: errorData.error || "Failed to mark order as delivered",
+          text2: errorData.message || "Failed to mark order as delivered",
         });
         setApiStatus("error");
       }
@@ -213,9 +226,11 @@ export default function App() {
   }
 
   function confirmDelivery(id, participantEmail, size) {
-    Alert.prompt(
+
+    console.log(id,participantEmail,size);
+    Alert.alert(
       "Confirm Delivery",
-      Verify delivery for:\nEmail: ${participantEmail}\nSize: ${size}\nOrderId: ${id},
+      `Verify delivery for:\nEmail: ${participantEmail}\nSize: ${size}\nOrderId: ${id}`,
       [
         {
           text: "Cancel",
@@ -226,9 +241,8 @@ export default function App() {
         },
         {
           text: "Confirm",
-          onPress: (enteredPassword) => {
-            setPassword(enteredPassword);
-            processPassword();
+          onPress: () => {
+            processTeeDelivery(id);
           },
         },
       ],
@@ -242,7 +256,7 @@ export default function App() {
 
       let kfid = qrData.trim();
 
-      const orderResponse = await fetch(${apiUrl}/tee-order, {
+      const orderResponse = await fetch(`${apiUrl}/tee-order`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -268,6 +282,7 @@ export default function App() {
       const {id} = result.teeOrders[0];
       const {size} = result.teeOrders[0];
       const {participantEmail} = result.teeOrders[0];
+      console.log(id,size,participantEmail);
 
       confirmDelivery(id, participantEmail, size);
 
